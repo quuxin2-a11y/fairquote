@@ -18,6 +18,16 @@
     s.settings = s.settings || { server: "", token: "", tag: "", link: "" };
     return s;
   }
+  // The built-in server (set in index.html) is used unless the person enters their own in Settings.
+  function srv() {
+    var c = window.FQ_CONFIG || {}, st = S.settings || {};
+    var url = (st.server || c.server || "").replace(/\/+$/, "");
+    return { url: url, headers: { "x-fq-token": st.server ? st.token || "" : c.token || "", "x-fq-device": deviceId() }, builtin: !st.server && !!c.server };
+  }
+  function deviceId() {
+    if (!S.device) { S.device = (window.crypto && crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2)).replace(/[^A-Za-z0-9-]/g, "").slice(0, 60); save(); }
+    return S.device;
+  }
   function save() {
     try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast("Could not save on this device."); }
   }
@@ -110,6 +120,7 @@
   }
 
   // ---------- PDF summary ----------
+  var PRIVACY_URL = "https://github.com/quuxin2-a11y/fairquote/blob/main/PRIVACY.md";
   var DEFAULT_LINK = "https://quuxin2-a11y.github.io/fairquote/site.html";
   function toBase64(bytes) {
     var s = "", n = 0x8000;
@@ -120,7 +131,7 @@
     var r = CHK.result, v = CHK.veh || active();
     var bytes;
     try {
-      bytes = window.FQREPORT.build(r, v, { shop: CHK.quote && CHK.quote.shop, link: S.settings.link || DEFAULT_LINK });
+      bytes = window.FQREPORT.build(r, v, { shop: CHK.quote && CHK.quote.shop, link: S.settings.link || DEFAULT_LINK, privacy: PRIVACY_URL });
     } catch (e) { return toast("Could not make the PDF."); }
     var name = "FairQuote-" + [v.make, v.model].filter(Boolean).join("-").replace(/[^A-Za-z0-9-]+/g, "") + "-" + new Date().toISOString().slice(0, 10) + ".pdf";
     var P = window.Capacitor && window.Capacitor.Plugins;
@@ -150,11 +161,11 @@
     var job = E.jobById(el.dataset.id), v = active();
     var box = el.parentNode.querySelector(".vids");
     var q = videoQuery(job, v).replace(/\s+/g, " ").trim();
-    var st = S.settings;
+    var sv = srv();
     var fallback = '<a class="btn sm ghost" href="' + ytSearchUrl(q) + '" target="_blank" rel="noopener">Search on YouTube instead</a>';
-    if (!st.server) { box.innerHTML = '<p class="sm mut">Videos need your FairQuote server (Settings).</p>' + fallback; return; }
+    if (!sv.url) { box.innerHTML = '<p class="sm mut">Videos are not set up yet.</p>' + fallback; return; }
     box.innerHTML = '<div class="spin" style="margin:12px auto;width:28px;height:28px;border-width:4px"></div>';
-    fetch(st.server.replace(/\/+$/, "") + "/videos?q=" + encodeURIComponent(q), { headers: { "x-fq-token": st.token || "" } })
+    fetch(sv.url + "/videos?q=" + encodeURIComponent(q), { headers: sv.headers })
       .then(function (r) { return r.json().catch(function () { return {}; }); })
       .then(function (j) {
         if (!j.ok || !j.videos || !j.videos.length) { box.innerHTML = '<p class="sm mut">' + esc(j.error || "No videos found.") + "</p>" + fallback; return; }
@@ -181,9 +192,9 @@
   var CFG = null;
   function getConfig() {
     if (CFG) return Promise.resolve(CFG);
-    var st = S.settings;
-    if (!st.server) return Promise.resolve({ maps: "" });
-    return fetch(st.server.replace(/\/+$/, "") + "/config", { headers: { "x-fq-token": st.token || "" } })
+    var sv = srv();
+    if (!sv.url) return Promise.resolve({ maps: "" });
+    return fetch(sv.url + "/config", { headers: sv.headers })
       .then(function (r) { return r.json(); })
       .then(function (j) { CFG = j && j.ok ? j : { maps: "" }; return CFG; })
       .catch(function () { return { maps: "" }; });
@@ -334,13 +345,13 @@
     if (CHK.step === "result") return checkResult();
   }
   function checkStart() {
-    var haveServer = !!S.settings.server;
+    var haveServer = !!srv().url;
     shell("<h1>Check a quote</h1>" +
       (CHK.err ? '<div class="note e">' + esc(CHK.err) + "</div>" : "") +
       '<p class="mut">Make sure the whole quote is in the photo, with each line and price readable.</p>' +
       '<input id="file" type="file" accept="image/*" class="hide">' +
       '<button class="btn" data-act="pickfile">' + IC.cam + " Take or choose a photo</button>" +
-      (haveServer ? "" : '<div class="note w" style="margin-top:12px">Photo reading needs your FairQuote server. Add its address in Settings, or type the quote in below.</div>') +
+      (haveServer ? "" : '<div class="note w" style="margin-top:12px">Photo reading is not set up yet. Type the quote in below, or add a server in Settings.</div>') +
       '<div style="height:10px"></div><button class="btn alt" data-act="typeit">Type the quote in</button>' +
       "<h2>Or try a sample</h2>" + SAMPLES.map(function (s, i) {
         return '<button class="card row" style="width:100%;text-align:left" data-act="sample" data-i="' + i + '"><div style="flex:1"><b>' + esc(s.name) + '</b><div class="sm mut">' + esc(s.note) + "</div></div><span>›</span></button>";
@@ -445,8 +456,8 @@
     });
   }
   function readPhoto(dataUrl) {
-    var st = S.settings;
-    if (!st.server) return Promise.reject(new Error("Add your FairQuote server address in Settings to read photos, or type the quote in."));
+    var sv = srv();
+    if (!sv.url) return Promise.reject(new Error("Photo reading is not set up yet. Type the quote in, or add a server in Settings."));
     var v = active();
     var body = {
       image: dataUrl.split(",")[1],
@@ -455,9 +466,9 @@
     };
     var ctl = new AbortController();
     var timer = setTimeout(function () { ctl.abort(); }, 45000);
-    return fetch(st.server.replace(/\/+$/, "") + "/read", {
+    return fetch(sv.url + "/read", {
       method: "POST", signal: ctl.signal,
-      headers: { "content-type": "application/json", "x-fq-token": st.token || "" },
+      headers: Object.assign({ "content-type": "application/json" }, sv.headers),
       body: JSON.stringify(body)
     }).then(function (r) {
       clearTimeout(timer);
@@ -475,13 +486,13 @@
   // ---------- settings ----------
   function settings() {
     var st = S.settings;
-    shell('<h1>Settings</h1><div class="card"><h3>Quote reader</h3><p class="sm mut">Photo reading runs on your own FairQuote server so no secret keys are stored in the app. The setup steps are in the guide.</p>' +
+    shell('<h1>Settings</h1><div class="card"><h3>Quote reader (advanced)</h3><p class="sm mut">Photo reading is built in. Only fill these in to use your own server instead.</p>' +
       '<label class="f">Server address</label><input type="text" id="srv" value="' + esc(st.server) + '" placeholder="https://fairquote.yourname.workers.dev">' +
-      '<label class="f">Access code</label><input type="text" id="tok" value="' + esc(st.token) + '" placeholder="the code you set on the server"></div>' +
+      '<label class="f">Access code</label><input type="text" id="tok" value="' + esc(st.token) + '" placeholder="the access code for your server"></div>' +
       '<div class="card"><h3>Link on shared PDFs</h3><label class="f">Link for the QR code</label><input type="text" id="lnk" value="' + esc(st.link) + '" placeholder="' + esc(DEFAULT_LINK) + '"><p class="sm mut">Anyone who scans the QR code on a shared summary goes here. Leave blank for the default. Use your app download or website link.</p></div>' +
       '<div class="card"><h3>Parts links (optional)</h3><label class="f">Amazon Associates tag</label><input type="text" id="tag" value="' + esc(st.tag) + '" placeholder="yourtag-20"><p class="sm mut">If you join an affiliate program, your tag is added to Amazon links.</p></div>' +
       '<button class="btn" data-act="savesettings">Save settings</button><div style="height:10px"></div>' +
-      '<div class="card"><h3>Your data</h3><p class="sm mut">Everything is stored on this phone only. Photos are not kept after reading.</p><div class="row"><button class="btn sm alt" data-act="export">Copy my data</button><button class="btn sm ghost" data-act="wipe" style="color:var(--r)">Delete all</button></div></div>' +
+      '<div class="card"><h3>Your data</h3><p class="sm mut">Everything is stored on this phone only. Photos are not kept after reading. <a href="#" data-act="privacy">Privacy policy</a></p><div class="row"><button class="btn sm alt" data-act="export">Copy my data</button><button class="btn sm ghost" data-act="wipe" style="color:var(--r)">Delete all</button></div></div>' +
       '<p class="sm mut" style="text-align:center">FairQuote ' + APP_V + " · starter price data</p>" +
       '<button class="btn ghost" data-act="closeset">Back</button>');
   }
@@ -552,9 +563,10 @@
     if (a === "restart") { CHK = { step: "start", err: "" }; tab = "check"; return render(); }
     if (a === "editquote") { CHK.step = "review"; return render(); }
     if (a === "openhist") { var h = S.history.filter(function (x) { return x.id === el.dataset.id; })[0]; if (h) { CHK = { step: "result", quote: h.quote, veh: h.vehSnap, result: E.analyze(h.quote, h.vehSnap), img: "" }; tab = "check"; render(); } return; }
+    if (a === "privacy") { e.preventDefault(); return openOut(PRIVACY_URL); }
     if (a === "sharepdf") return sharePdf();
     if (a === "share") {
-      var txt = summaryText(CHK.result, CHK.veh || active());
+      var txt = summaryText(CHK.result, CHK.veh || active()) + "\n\nPrivacy policy: " + PRIVACY_URL;
       if (navigator.share) navigator.share({ text: txt }).catch(function () {});
       else if (navigator.clipboard) navigator.clipboard.writeText(txt).then(function () { toast("Summary copied."); });
       return;

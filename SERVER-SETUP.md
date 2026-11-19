@@ -39,3 +39,17 @@ Set a monthly spend limit in your AI provider's console before sharing the app w
 - Never put the API key in the app or in this repository. It belongs only in Cloudflare secrets.
 - The access code stops strangers from using your server. Change it any time (Settings in Cloudflare, then in the app).
 - Before real users: add per-user limits and sign-in. The built-in hourly cap is only a guard against loops.
+
+## Make it work for everyone (no key for users)
+
+Users install the app and photo reading just works. The server address and access code are built into the app, and the real AI key stays on your server.
+
+1. In Cloudflare, go to **Storage & Databases → KV → Create a namespace**. Name it `fq-kv`.
+2. Open your worker → **Settings → Bindings → Add → KV namespace**. Variable name `FQ_KV`, pick `fq-kv`, save.
+3. Worker → **Settings → Variables**. Optional plain-text values: `DAILY_READ_CAP` = 300 (most photo reads per day across everyone), `DEVICE_DAILY_CAP` = 5 (reads per phone per day), `VIDEO_DAILY_CAP` = 80.
+4. On GitHub, open `index.html` and tap the pencil. Find `window.FQ_CONFIG = { server: "", token: "" };` and fill in your worker address and your `APP_TOKEN` value between the quotes. Commit. The app rebuilds.
+5. At your AI provider, set a monthly spend limit. This is your real safety net.
+
+The token inside the app can be found by a determined person, so it is not a secret. What protects your money is the daily caps and the spend limit. At 300 reads a day the AI cost is small and fixed. Raise the caps as you earn revenue.
+
+Because users' quote photos pass through your server, publish a short privacy policy (see PRIVACY.md) before sharing the app widely.

@@ -140,6 +140,8 @@
       doc.line(M, PH - 50, PW - M, PH - 50, LINE);
       var disc = "FairQuote gives typical price ranges from starter estimates and typical state labor rates. It is a guide for asking good questions, not a guarantee or a quote, and it does not say any shop is dishonest. Actual prices vary with part brand, vehicle details and the shop.";
       P.wrap(disc, 7.5, false, CW - 60).forEach(function (ln, j) { doc.text(M, PH - 40 + j * 9, ln, 7.5, { color: MUT }); });
+      var pv = "Privacy policy: " + (o.privacy || "https://github.com/quuxin2-a11y/fairquote/blob/main/PRIVACY.md");
+      doc.text(M, PH - 14, pv, 7.5, { color: MUT });
       var pg = "Page " + (i + 1) + " of " + total;
       doc.text(PW - M - P.width(pg, 8), PH - 40, pg, 8, { color: MUT });
     });

@@ -12,6 +12,10 @@
 </head>
 <body>
 <div id="app" aria-live="polite"></div>
+<script>
+/* Built-in reader server. Fill in after deploying worker.js (see SERVER-SETUP.md). The token is not secret: the server limits reads per device and per day. */
+window.FQ_CONFIG = { server: "", token: "" };
+</script>
 <script src="data.js"></script>
 <script src="engine.js"></script>
 <script src="qr.js"></script>

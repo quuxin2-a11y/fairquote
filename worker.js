@@ -10,6 +10,12 @@
  * Optional plain variables:
  *   MODEL              defaults to claude-sonnet-5-5
  *   MAX_PER_HOUR       reads allowed per code per hour in this region, default 60
+ *   DAILY_READ_CAP     photo reads allowed per day across ALL users, default 300 (your spend ceiling)
+ *   DEVICE_DAILY_CAP   photo reads per device (and per network address) per day, default 5
+ *   VIDEO_DAILY_CAP    new video searches per day, default 80 (the free YouTube quota allows about 100)
+ * Optional binding:
+ *   FQ_KV              a Workers KV namespace; keeps the daily counts exact across regions. Without it the
+ *                      counts are kept in memory per instance, which is weaker.
  *   YOUTUBE_API_KEY    optional secret; turns on the how-to videos that play inside the app
  *   MAPS_EMBED_KEY     optional; a Google Maps Embed API key (restricted to that API) for the in-app shop map
  *
@@ -22,7 +28,7 @@ const MAX_IMAGE_CHARS = 5_500_000; // about 4 MB of image once base64 encoded
 const CORS = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET, POST, OPTIONS",
-  "access-control-allow-headers": "content-type, x-fq-token",
+  "access-control-allow-headers": "content-type, x-fq-token, x-fq-device",
   "access-control-max-age": "86400"
 };
 
@@ -39,6 +45,27 @@ function limited(token, max) {
   hits.set(k, n);
   if (hits.size > 500) for (const key of hits.keys()) if (!key.endsWith(":" + hour)) hits.delete(key);
   return n > max;
+}
+
+// Daily usage counters. KV when bound (exact enough for a spend ceiling), else per-instance memory.
+const mem = new Map();
+async function bump(env, key, limit) {
+  const day = new Date().toISOString().slice(0, 10);
+  const k = "u:" + day + ":" + key;
+  let n;
+  if (env.FQ_KV) {
+    n = (parseInt(await env.FQ_KV.get(k), 10) || 0) + 1;
+    if (n <= limit) await env.FQ_KV.put(k, String(n), { expirationTtl: 172800 });
+  } else {
+    n = (mem.get(k) || 0) + 1;
+    if (n <= limit) mem.set(k, n);
+    if (mem.size > 2000) for (const x of mem.keys()) if (!x.startsWith("u:" + day)) mem.delete(x);
+  }
+  return n <= limit;
+}
+function deviceKey(request) {
+  const d = String(request.headers.get("x-fq-device") || "").replace(/[^A-Za-z0-9-]/g, "").slice(0, 60);
+  return d || "none";
 }
 
 function buildPrompt(vehicle, catalog) {
@@ -93,6 +120,7 @@ async function videos(env, url) {
   const cache = typeof caches !== "undefined" ? caches.default : null;
   const key = new Request("https://fq-cache.invalid/videos?q=" + encodeURIComponent(q.toLowerCase()));
   if (cache) { const hit = await cache.match(key); if (hit) return new Response(hit.body, { status: 200, headers: { "content-type": "application/json", ...CORS } }); }
+  if (!(await bump(env, "all:video", Number(env.VIDEO_DAILY_CAP) || 80))) return json({ ok: false, error: "Video search is busy today. Try again tomorrow." }, 429);
   const api = "https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoEmbeddable=true&videoSyndicated=true" +
     "&safeSearch=strict&maxResults=4&relevanceLanguage=en&regionCode=US&q=" + encodeURIComponent(q) + "&key=" + encodeURIComponent(env.YOUTUBE_API_KEY);
   let res;
@@ -128,6 +156,15 @@ export default {
     try { body = await request.json(); } catch (e) { return json({ ok: false, error: "Bad request." }, 400); }
     const image = String((body && body.image) || "");
     if (!image || image.length > MAX_IMAGE_CHARS) return json({ ok: false, error: "The photo is missing or too large." }, 413);
+
+    const perDevice = Number(env.DEVICE_DAILY_CAP) || 5;
+    const ip = request.headers.get("cf-connecting-ip") || "noip";
+    if (!(await bump(env, "dev:" + deviceKey(request), perDevice)) || !(await bump(env, "ip:" + ip, perDevice * 3))) {
+      return json({ ok: false, error: "You have used today's free quote reads. Try again tomorrow, or type the quote in." }, 429);
+    }
+    if (!(await bump(env, "all:read", Number(env.DAILY_READ_CAP) || 300))) {
+      return json({ ok: false, error: "Photo reading is busy today. Please type the quote in, or try again tomorrow." }, 429);
+    }
 
     let res;
     try {

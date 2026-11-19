@@ -7,3 +7,6 @@
 - The reader is told to ignore names, addresses, phone numbers, plates, VINs and payment details. Cover them anyway if you can.
 - "Delete all" in Settings erases everything on the phone.
 - How-to videos are shown through YouTube's embedded player inside the app. YouTube can see that your device is watching the video and has its own privacy policy. The search for videos goes through your FairQuote server and sends only the car and repair name.
+
+## Quote photos
+When you use photo reading, the photo is sent through the FairQuote server to an AI service to read the text, and is not stored by FairQuote. A random device ID (not linked to your name) is sent only to enforce daily limits.

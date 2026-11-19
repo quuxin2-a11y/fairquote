@@ -40,6 +40,15 @@ const vr = await worker.fetch(vreq("2016 Honda Accord front brake pads how to"),
 const vj = await vr.json();
 ok(vr.status === 200 && vj.ok && vj.videos.length === 1 && vj.videos[0].id === "abcdefghijk", "videos cleaned");
 ok(seen.includes("videoEmbeddable=true") && seen.includes("safeSearch=strict"), "embeddable and safe only");
+// daily caps
+globalThis.fetch = async () => new Response(JSON.stringify({ content: [{ type: "text", text: '{"shop":"","lines":[]}' }] }), { status: 200 });
+const cenv = { ...env, DEVICE_DAILY_CAP: "2", DAILY_READ_CAP: "4" };
+const dpost = (dev, ip = "1.1.1.1") => req("/read", { method: "POST", headers: { "x-fq-token": "secret", "x-fq-device": dev, "cf-connecting-ip": ip, "content-type": "application/json" }, body: JSON.stringify({ image: "abc" }) });
+ok((await worker.fetch(dpost("a"), cenv)).status === 200, "first read ok");
+ok((await worker.fetch(dpost("a"), cenv)).status === 200, "second read ok");
+ok((await worker.fetch(dpost("a"), cenv)).status === 429, "device cap");
+ok((await worker.fetch(dpost("b", "2.2.2.2"), cenv)).status === 200, "other device still ok");
+ok((await worker.fetch(dpost("c", "3.3.3.3"), cenv)).status === 429, "global daily cap");
 const cfg = await (await worker.fetch(req("/config", { headers: { "x-fq-token": "secret" } }), { ...env, MAPS_EMBED_KEY: "mk" })).json();
 ok(cfg.ok && cfg.maps === "mk" && cfg.videos === false, "config");
 ok((await worker.fetch(req("/config", { headers: { "x-fq-token": "no" } }), env)).status === 401, "config needs the token");
