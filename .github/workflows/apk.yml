@@ -1,0 +1,48 @@
+name: Build APK
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Run tests
+        run: |
+          node tests.js
+          node worker.test.mjs
+      - name: Build standalone Android app
+        run: |
+          mkdir -p app/www
+          cp index.html app.css data.js engine.js qr.js pdf.js report.js app.js manifest.webmanifest sw.js *.png app/www/
+          cd app
+          npm init -y
+          npm install @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 @capacitor/browser@6 @capacitor/filesystem@6 @capacitor/share@6
+          echo '{"appId":"com.fairquote.app","appName":"FairQuote","webDir":"www"}' > capacitor.config.json
+          npx cap add android
+          rm -rf android/app/src/main/res/mipmap-anydpi-v26
+          for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+            for f in ic_launcher ic_launcher_round ic_launcher_foreground; do
+              cp ../icon-512.png android/app/src/main/res/mipmap-$d/$f.png
+            done
+          done
+          npx cap sync android
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+          cp app/build/outputs/apk/debug/app-debug.apk ../../fairquote.apk
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: FairQuote APK
+          files: fairquote.apk
