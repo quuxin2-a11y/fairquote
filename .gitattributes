@@ -1,2 +1,2 @@
-site-*.html linguist-generated=true
-site.html linguist-generated=true
+site.html linguist-vendored
+site-*.html linguist-vendored
