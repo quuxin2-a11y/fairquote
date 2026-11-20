@@ -63,6 +63,14 @@ async function bump(env, key, limit) {
   }
   return n <= limit;
 }
+async function unbump(env, key) {
+  const day = new Date().toISOString().slice(0, 10);
+  const k = "u:" + day + ":" + key;
+  if (env.FQ_KV) {
+    const n = parseInt(await env.FQ_KV.get(k), 10) || 0;
+    if (n > 0) await env.FQ_KV.put(k, String(n - 1), { expirationTtl: 172800 });
+  } else if (mem.get(k) > 0) mem.set(k, mem.get(k) - 1);
+}
 function deviceKey(request) {
   const d = String(request.headers.get("x-fq-device") || "").replace(/[^A-Za-z0-9-]/g, "").slice(0, 60);
   return d || "none";
@@ -159,37 +167,62 @@ export default {
 
     const perDevice = Number(env.DEVICE_DAILY_CAP) || 5;
     const ip = request.headers.get("cf-connecting-ip") || "noip";
-    if (!(await bump(env, "dev:" + deviceKey(request), perDevice)) || !(await bump(env, "ip:" + ip, perDevice * 3))) {
+    const kDev = "dev:" + deviceKey(request), kIp = "ip:" + ip, kAll = "all:read";
+    const used = [];
+    const refund = async () => { for (const k of used) await unbump(env, k); };
+    if (!(await bump(env, kDev, perDevice))) {
       return json({ ok: false, error: "You have used today's free quote reads. Try again tomorrow, or type the quote in." }, 429);
     }
-    if (!(await bump(env, "all:read", Number(env.DAILY_READ_CAP) || 300))) {
+    used.push(kDev);
+    if (!(await bump(env, kIp, perDevice * 3))) {
+      await refund();
+      return json({ ok: false, error: "You have used today's free quote reads. Try again tomorrow, or type the quote in." }, 429);
+    }
+    used.push(kIp);
+    if (!(await bump(env, kAll, Number(env.DAILY_READ_CAP) || 300))) {
+      await refund();
       return json({ ok: false, error: "Photo reading is busy today. Please type the quote in, or try again tomorrow." }, 429);
     }
+    used.push(kAll);
 
-    let res;
+    const callAI = (withTemp) => fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify(Object.assign({
+        model: env.MODEL || DEFAULT_MODEL,
+        max_tokens: 2500,
+        messages: [{ role: "user", content: [
+          { type: "image", source: { type: "base64", media_type: "image/jpeg", data: image } },
+          { type: "text", text: buildPrompt(body.vehicle, body.catalog) }
+        ] }]
+      }, withTemp ? { temperature: 0 } : {}))
+    });
+    let res, detail = "";
     try {
-      res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
-        body: JSON.stringify({
-          model: env.MODEL || DEFAULT_MODEL,
-          max_tokens: 2500,
-          temperature: 0,
-          messages: [{ role: "user", content: [
-            { type: "image", source: { type: "base64", media_type: "image/jpeg", data: image } },
-            { type: "text", text: buildPrompt(body.vehicle, body.catalog) }
-          ] }]
-        })
-      });
+      res = await callAI(true);
+      if (res.status === 400) {
+        detail = await res.text().catch(() => "");
+        if (/temperature/i.test(detail)) { res = await callAI(false); detail = ""; }
+      }
     } catch (e) {
+      await refund();
       return json({ ok: false, error: "Could not reach the reader. Try again." }, 502);
     }
-    if (!res.ok) return json({ ok: false, error: "The reader is unavailable right now (" + res.status + ")." }, 502);
+    if (!res.ok) {
+      await refund();
+      if (!detail) detail = await res.text().catch(() => "");
+      let why = "";
+      try { why = (JSON.parse(detail).error || {}).message || ""; } catch (e) { why = ""; }
+      if (/credit|billing/i.test(why)) why = "The reader account needs credit.";
+      else if (/model/i.test(why)) why = "The reader model name is not accepted.";
+      else why = "";
+      return json({ ok: false, error: "The reader is unavailable right now (" + res.status + ")." + (why ? " " + why : "") }, 502);
+    }
 
     const out = await res.json();
     const text = ((out.content || []).find((c) => c.type === "text") || {}).text || "";
     const parsed = extractJson(text);
-    if (!parsed) return json({ ok: false, error: "The quote could not be read. Try a clearer photo." }, 422);
+    if (!parsed) { await refund(); return json({ ok: false, error: "The quote could not be read. Try a clearer photo." }, 422); }
     return json({ ok: true, quote: clean(parsed) });
   }
 };
