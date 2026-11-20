@@ -158,6 +158,10 @@
         st = "high";
         notes.push("Your vehicle is electric, and this service does not apply to electric vehicles. Ask the shop to explain exactly what was done.");
       }
+      if (!ev && job.ev === true) {
+        st = "high";
+        notes.push("This service is for electric vehicles, and your vehicle is not electric. Ask the shop what exactly was done.");
+      }
       var intv = intervalNote(job, odo);
       if (intv) notes.push(intv);
       if (rate && rate > area.hi * 1.15)
@@ -217,7 +221,7 @@
     var over = sum(items, function (it) { return it.over; }) + sum(feeItems, function (f) { return f.over; });
     var ratio = benchmarked ? over / benchmarked : 0;
     var verdict = ratio > 0.25 ? "high" : ratio > 0.07 ? "slight" : "fair";
-    if (items.some(function (it) { return ev && it.job.ev === false; })) verdict = "high";
+    if (items.some(function (it) { return (ev && it.job.ev === false) || (!ev && it.job.ev === true); })) verdict = "high";
     var lowTotal = sum(items, function (it) { return it.expect.total[0]; });
     var highTotal = sum(items, function (it) { return it.expect.total[1]; });
 

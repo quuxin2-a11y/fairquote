@@ -98,3 +98,9 @@ a.btn{text-decoration:none}
 #vmodal .vframe{position:relative;padding-top:56.25%;background:#000;border-radius:10px;overflow:hidden}
 #vmodal iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
 #vmodal .vframe.tall{padding-top:120%}
+
+.prow{display:flex;gap:10px;align-items:flex-start;padding:8px;margin-top:8px;border:1px solid #e3e8ee;border-radius:12px;background:#fff;color:inherit;text-decoration:none}
+.prow img{width:76px;height:76px;object-fit:cover;border-radius:8px;flex:none;background:#eef1f4}
+.prow>span{display:flex;flex-direction:column;gap:2px;min-width:0}
+.prow b{font-size:14px;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.prow .pp{font-size:18px;font-weight:700;color:#0f7a54}

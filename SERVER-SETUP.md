@@ -53,3 +53,11 @@ Users install the app and photo reading just works. The server address and acces
 The token inside the app can be found by a determined person, so it is not a secret. What protects your money is the daily caps and the spend limit. At 300 reads a day the AI cost is small and fixed. Raise the caps as you earn revenue.
 
 Because users' quote photos pass through your server, publish a short privacy policy (see PRIVACY.md) before sharing the app widely.
+
+## Optional: parts with prices inside the app (eBay)
+
+1. Create a free account at developer.ebay.com and open **Application Keys**. Create a **Production** keyset. eBay asks about "Marketplace account deletion". Because FairQuote stores no eBay user data, you can choose the exemption option and say so.
+2. In the Cloudflare worker add two **Secrets**: `EBAY_CLIENT_ID` (the App ID) and `EBAY_CLIENT_SECRET` (the Cert ID). Optional: `EBAY_CAMPAIGN_ID` (from the eBay Partner Network) to earn on purchases, and `PARTS_DAILY_CAP` (default 150 new searches a day, results are cached for a day).
+3. Paste the new `worker.js` and deploy. The "Show parts, prices and where they ship from" button appears in the app on its own once the keys are in.
+
+Listings are eBay sellers' prices and ship-from locations, not store inventory. The store links (AutoZone, O'Reilly, NAPA, Amazon) stay under the list and open inside the app.

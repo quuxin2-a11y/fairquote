@@ -3,7 +3,7 @@
 (function () {
   "use strict";
   var D = window.FQDATA, E = window.FQ;
-  var APP_V = "1.1.0";
+  var APP_V = "1.1.5";
   var KEY = "fq-v1";
   var root = document.getElementById("app");
 
@@ -15,6 +15,7 @@
     s = s || {};
     s.vehicles = s.vehicles || [];
     s.history = s.history || [];
+    s.vehicles.forEach(function (v) { var g = window.FQDATA && window.FQDATA.guessFuel(v.make, v.model, v.trim); if (g && v.fuel !== g) v.fuel = g; });
     s.settings = s.settings || { server: "", token: "", tag: "", link: "" };
     return s;
   }
@@ -114,7 +115,8 @@
       ["Amazon", "https://www.amazon.com/s?k=" + q + tag],
       ["Compare prices", "https://www.google.com/search?tbm=shop&q=" + q]
     ];
-    return '<div class="links">' + L.map(function (l) {
+    return '<div class="pwrap"><button class="btn sm alt" data-act="parts" data-id="' + job.id + '">Show parts, prices and where they ship from</button><div class="plist"></div></div>' +
+      '<div class="links">' + L.map(function (l) {
       return '<a href="' + l[1] + '" target="_blank" rel="noopener">' + l[0] + "</a>";
     }).join("") + "</div>";
   }
@@ -151,7 +153,7 @@
   // ---------- how-to videos (play inside the app) ----------
   function videoBlock(job, v) {
     if (!job.diy) return "";
-    return '<h3 style="margin-top:12px">Watch how it is done</h3><button class="btn sm alt" data-act="vids" data-id="' + job.id + '">' + IC.play + ' How-to videos</button><div class="vids"></div>';
+    return '<div class="vwrap" style="display:none"><h3 style="margin-top:12px">Watch how it is done</h3><button class="btn sm alt" data-act="vids" data-id="' + job.id + '">' + IC.play + ' How-to videos</button><div class="vids"></div></div>';
   }
   function videoQuery(job, v) {
     return ((v && [v.year, v.make, v.model].filter(Boolean).join(" ")) || "") + " " + job.name + " how to DIY";
@@ -174,6 +176,31 @@
         }).join("");
       })
       .catch(function () { box.innerHTML = '<p class="sm mut">Could not load videos. Check your connection.</p>' + fallback; });
+  }
+  function loadParts(el) {
+    var job = E.jobById(el.dataset.id), v = active() || {};
+    var box = el.parentNode.querySelector(".plist"), sv = srv();
+    var estimate = function (why) {
+      var e = E.expect(job, active() || { make: "", body: "sedan", fuel: "gas", state: "TX", odo: 0 }, (active() || {}).state || "TX");
+      box.innerHTML = '<div class="note"><b>Typical parts cost for your vehicle: ' + E.range(e.parts[0], e.parts[1]) + "</b>" +
+        '<p class="sm mut" style="margin:4px 0 0">' + esc(why) + " Use the store links below to compare real prices, and ask for the brand and part number.</p></div>";
+    };
+    if (!sv.url) return estimate("Live parts listings are being set up.");
+    box.innerHTML = '<div class="spin" style="margin:12px auto;width:28px;height:28px;border-width:4px"></div>';
+    var qs = "q=" + encodeURIComponent(job.term || job.name) + "&year=" + encodeURIComponent(v.year || "") + "&make=" + encodeURIComponent(v.make || "") + "&model=" + encodeURIComponent(v.model || "") + "&zip=" + encodeURIComponent(v.zip || "");
+    fetch(sv.url + "/parts?" + qs, { headers: sv.headers })
+      .then(function (r) { return r.json().catch(function () { return {}; }); })
+      .then(function (j) {
+        if (!j.ok || !j.items || !j.items.length) { if (j.error && !j.items) return estimate("Live parts listings are being set up."); box.innerHTML = '<p class="sm mut">No matching parts found. Try the store links below.</p>'; return; }
+        var $ = function (n) { return "$" + (Math.round(n * 100) / 100).toFixed(2); };
+        box.innerHTML = '<p class="sm mut" style="margin:8px 0 4px">' + (j.fit ? "Listings that say they fit your " + esc([v.year, v.make, v.model].join(" ")) + "." : "Check that each part fits your car.") + " Prices come from sellers on eBay and change often.</p>" +
+          j.items.map(function (x) {
+            return '<a class="prow" href="' + esc(x.url) + '" target="_blank" rel="noopener">' + (x.img ? '<img loading="lazy" alt="" src="' + esc(x.img) + '">' : "<span></span>") +
+              '<span><b>' + esc(x.title) + '</b><span class="pp">' + $(x.price) + '</span><span class="sm mut">' + esc(x.cond || "") + (x.ship === 0 ? " · Free shipping" : x.ship != null ? " · " + $(x.ship) + " shipping" : "") + "</span>" +
+              '<span class="sm mut">' + (x.from ? "Ships from " + esc(x.from) : "") + (x.seller ? " · " + esc(x.seller) + (x.fb ? " " + esc(x.fb) + "%" : "") : "") + "</span></span></a>";
+          }).join("");
+      })
+      .catch(function () { estimate("Could not load live listings right now."); });
   }
   function openModal(title, src, opts) {
     closeVideo();
@@ -199,13 +226,65 @@
       .then(function (j) { CFG = j && j.ok ? j : { maps: "" }; return CFG; })
       .catch(function () { return { maps: "" }; });
   }
+  // Shop finder: nearest shops by default, with a search-area slider and a city box.
+  var SHOP = { lat: null, lng: null, city: "", z: 13 };
+  var AREAS = { 1: [15, "about 1 mile"], 2: [14, "about 2 miles"], 3: [13, "about 5 miles"], 4: [12, "about 10 miles"], 5: [11, "about 20 miles"] };
+  function shopSrc() {
+    var area = AREAS[SHOP.area || 3], c = SHOP.cfg || {};
+    var near = SHOP.city ? "auto repair near " + SHOP.city : "auto repair";
+    var ll = !SHOP.city && SHOP.lat != null ? SHOP.lat + "," + SHOP.lng : "";
+    if (c.maps) return "https://www.google.com/maps/embed/v1/search?key=" + encodeURIComponent(c.maps) + "&q=" + encodeURIComponent(near) + "&zoom=" + area[0] + (ll ? "&center=" + ll : "");
+    return "https://maps.google.com/maps?output=embed&q=" + encodeURIComponent(near) + "&z=" + area[0] + (ll ? "&ll=" + ll : "");
+  }
+  function shopRefresh() {
+    var f = document.getElementById("shopframe"), t = document.getElementById("shopnote");
+    if (f) f.src = shopSrc();
+    if (t) t.textContent = SHOP.city ? "Showing shops near " + SHOP.city + "." : SHOP.lat != null ? "Showing shops closest to you." : (SHOP.msg || "Showing shops near your vehicle's area.");
+  }
+  function whereAmI() {
+    return new Promise(function (res) {
+      var G = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Geolocation;
+      var ok = function (p) { res({ lat: p.coords.latitude, lng: p.coords.longitude }); };
+      var no = function () { res(null); };
+      if (G && G.getCurrentPosition) G.getCurrentPosition({ enableHighAccuracy: false, timeout: 10000 }).then(ok, no);
+      else if (navigator.geolocation) navigator.geolocation.getCurrentPosition(ok, no, { timeout: 10000, maximumAge: 300000 });
+      else res(null);
+    });
+  }
   function shopsMap(v) {
-    var q = "auto repair near " + ((v && (v.zip || D.STATES[v.state])) || "me");
+    closeVideo();
+    var fallback = (v && (v.zip || D.STATES[v.state])) || "";
+    SHOP = { lat: null, lng: null, city: "", area: 3, cfg: null, msg: "Finding shops near you…" };
+    var m = document.createElement("div");
+    m.id = "vmodal";
+    m.innerHTML = '<div class="vbox"><div class="vbar"><b>Repair shops nearby</b><button data-act="closevid" aria-label="Close">×</button></div>' +
+      '<div class="vframe tall"><iframe id="shopframe" title="Repair shops" allow="geolocation" referrerpolicy="strict-origin-when-cross-origin"></iframe></div>' +
+      '<p class="sm" id="shopnote" style="margin:8px 0 2px"></p>' +
+      '<label class="f" style="margin-top:6px">Search area: <span id="areatxt">about 5 miles</span></label>' +
+      '<input type="range" id="area" min="1" max="5" step="1" value="3" style="width:100%">' +
+      '<div class="row" style="margin-top:8px"><input type="text" id="shopcity" placeholder="Other city or ZIP" style="flex:1;min-width:0"><button class="btn sm alt" data-act="shopcity">Go</button><button class="btn sm ghost" data-act="shopme">Near me</button></div></div>';
+    document.body.appendChild(m);
+    m.querySelector("#area").addEventListener("input", function (e) {
+      SHOP.area = +e.target.value; document.getElementById("areatxt").textContent = AREAS[SHOP.area][1]; shopRefresh();
+    });
     getConfig().then(function (c) {
-      var src = c.maps ? "https://www.google.com/maps/embed/v1/search?key=" + encodeURIComponent(c.maps) + "&q=" + encodeURIComponent(q)
-        : "https://maps.google.com/maps?output=embed&q=" + encodeURIComponent(q);
-      openModal("Repair shops near " + ((v && (v.zip || D.STATES[v.state])) || "you"), src,
-        { tall: true, hint: "Tap a pin for hours, ratings and phone.", link: "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(q), linkText: "Open in Maps" });
+      SHOP.cfg = c;
+      return whereAmI();
+    }).then(function (p) {
+      if (p) { SHOP.lat = p.lat; SHOP.lng = p.lng; }
+      else { SHOP.city = fallback; SHOP.msg = fallback ? "Location is off, so showing shops near " + fallback + ". Tap Near me to try again." : "Location is off. Type a city or ZIP below."; }
+      shopRefresh();
+    });
+  }
+  function shopGo() {
+    var c = (document.getElementById("shopcity").value || "").trim();
+    if (!c) return;
+    SHOP.city = c; shopRefresh();
+  }
+  function shopMe() {
+    whereAmI().then(function (p) {
+      if (p) { SHOP.lat = p.lat; SHOP.lng = p.lng; SHOP.city = ""; shopRefresh(); }
+      else { SHOP.msg = "Could not get your location. Allow location for FairQuote in phone settings, or type a city."; shopRefresh(); toast("Location is off."); }
     });
   }
   // Links that leave the app open in the in-app browser panel when the Android app provides one.
@@ -232,6 +311,9 @@
     }).join("") + "</nav>";
     root.innerHTML = top + "<main>" + inner + "</main>" + tabs;
     window.scrollTo(0, 0);
+    if (root.querySelector(".vwrap, .pwrap")) getConfig().then(function (c) {
+      if (c && c.videos) [].forEach.call(root.querySelectorAll(".vwrap"), function (w) { w.style.display = ""; });
+    });
   }
 
   function render() {
@@ -284,6 +366,17 @@
       '<button class="btn" data-act="saveveh">Save vehicle</button>' +
       (S.vehicles.length ? '<div style="height:10px"></div><button class="btn ghost" data-act="cancelform">Cancel</button>' : ""), { bare: !S.vehicles.length });
   }
+  document.addEventListener("change", function (e) {
+    var t = e.target;
+    if (!t || !t.form || t.form.id !== "vf" || (t.name !== "make" && t.name !== "model" && t.name !== "trim")) return;
+    readForm();
+    var gf = D.guessFuel(FORM.make, FORM.model, FORM.trim);
+    if (gf && FORM.fuel !== gf) {
+      FORM.fuel = gf;
+      [].forEach.call(t.form.querySelectorAll('.opt[data-n="fuel"]'), function (b) { b.classList.toggle("on", b.dataset.v === gf); });
+      toast(gf === "ev" ? "Set to Electric. No oil, spark plug or exhaust jobs will be expected." : "Set to Hybrid.");
+    }
+  });
   function readForm() {
     var fm = document.getElementById("vf");
     if (!fm) return;
@@ -318,7 +411,7 @@
       '<div class="card"><b>Not sure how it works?</b><p class="sm mut">The guide walks through it with a live example.</p><button class="btn sm alt" data-act="tab" data-v="guide">Open the guide</button></div>');
   }
   function jobPicker() {
-    return '<select id="jobsel"><option value="">Choose a repair…</option>' + D.JOBS.filter(function (j) { return j.id !== "diag"; }).map(function (j) {
+    return '<select id="jobsel"><option value="">Choose a repair…</option>' + D.JOBS.filter(function (j) { var v = active(); return j.id !== "diag" && D.jobApplies(j, v && v.fuel); }).map(function (j) {
       return '<option value="' + j.id + '">' + esc(j.name) + "</option>";
     }).join("") + "</select>";
   }
@@ -462,7 +555,7 @@
     var body = {
       image: dataUrl.split(",")[1],
       vehicle: { year: v.year, make: v.make, model: v.model, body: v.body, fuel: v.fuel, odo: v.odo, state: v.state },
-      catalog: D.JOBS.map(function (j) { return { id: j.id, name: j.name }; })
+      catalog: D.JOBS.filter(function (j) { return D.jobApplies(j, v.fuel); }).map(function (j) { return { id: j.id, name: j.name }; })
     };
     var ctl = new AbortController();
     var timer = setTimeout(function () { ctl.abort(); }, 45000);
@@ -527,6 +620,9 @@
     if (!el) return;
     var a = el.dataset.act;
     if (a === "shops") return shopsMap(CHK.veh || active());
+    if (a === "parts") return loadParts(el);
+    if (a === "shopcity") return shopGo();
+    if (a === "shopme") return shopMe();
     if (a === "vids") return loadVideos(el);
     if (a === "playvid") return playVideo(el.dataset.id, el.dataset.t);
     if (a === "closevid") return closeVideo();
@@ -540,6 +636,8 @@
     if (a === "pick") { readForm(); FORM[el.dataset.n] = el.dataset.v; return vehicleForm(); }
     if (a === "saveveh") {
       readForm();
+      var gf = D.guessFuel(FORM.make, FORM.model, FORM.trim);
+      if (gf && FORM.fuel !== gf) { FORM.fuel = gf; toast(gf === "ev" ? "Set to Electric for this model." : "Set to Hybrid for this model."); }
       if (!FORM.make || !FORM.model) return toast("Add the make and model.");
       if (!(+FORM.odo >= 0) || FORM.odo === "") return toast("Add the odometer reading (a rough number is fine).");
       if (FORM.id) S.vehicles = S.vehicles.map(function (v) { return v.id === FORM.id ? FORM : v; });

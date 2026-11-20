@@ -27,7 +27,7 @@ jobs:
           cp index.html app.css data.js engine.js qr.js pdf.js report.js app.js manifest.webmanifest sw.js *.png app/www/
           cd app
           npm init -y
-          npm install @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 @capacitor/browser@6 @capacitor/filesystem@6 @capacitor/share@6
+          npm install @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 @capacitor/browser@6 @capacitor/filesystem@6 @capacitor/share@6 @capacitor/geolocation@6
           echo '{"appId":"com.fairquote.app","appName":"FairQuote","webDir":"www"}' > capacitor.config.json
           npx cap add android
           rm -rf android/app/src/main/res/mipmap-anydpi-v26

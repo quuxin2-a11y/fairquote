@@ -49,6 +49,28 @@ ok((await worker.fetch(dpost("a"), cenv)).status === 200, "second read ok");
 ok((await worker.fetch(dpost("a"), cenv)).status === 429, "device cap");
 ok((await worker.fetch(dpost("b", "2.2.2.2"), cenv)).status === 200, "other device still ok");
 ok((await worker.fetch(dpost("c", "3.3.3.3"), cenv)).status === 429, "global daily cap");
+globalThis.fetch = async () => new Response("{}", { status: 500 });
+const fenv = { ...env, DEVICE_DAILY_CAP: "1", DAILY_READ_CAP: "100" };
+for (let i = 0; i < 3; i++) ok((await worker.fetch(dpost("f", "9.9.9.9"), fenv)).status === 502, "failed reads are not counted " + i);
+// parts
+const preq = (qs, tok = "secret") => req("/parts?" + qs, { headers: { "x-fq-token": tok } });
+ok((await worker.fetch(preq("q=brake+pads"), env)).status === 501, "parts off without keys");
+const penv = { ...env, EBAY_CLIENT_ID: "id", EBAY_CLIENT_SECRET: "sec", PARTS_DAILY_CAP: "50" };
+let calls = [];
+globalThis.fetch = async (u, o) => {
+  calls.push(String(u));
+  if (String(u).includes("oauth2/token")) return new Response(JSON.stringify({ access_token: "T", expires_in: 7200 }), { status: 200 });
+  return new Response(JSON.stringify({ itemSummaries: [
+    { title: "Front brake pads Honda Accord", price: { value: "34.99", currency: "USD" }, image: { imageUrl: "https://i.ebayimg.com/a.jpg" }, condition: "New", itemLocation: { city: "Austin", stateOrProvince: "TX", country: "US" }, seller: { username: "partsco", feedbackPercentage: "99.1" }, shippingOptions: [{ shippingCost: { value: "0.00" } }], itemWebUrl: "https://www.ebay.com/itm/123" },
+    { title: "bad link", price: { value: "10" }, itemWebUrl: "https://evil.example/x" },
+    { title: "free?", price: { value: "0" }, itemWebUrl: "https://www.ebay.com/itm/9" }
+  ] }), { status: 200 });
+};
+const pr = await worker.fetch(preq("q=brake+pads&year=2015&make=Honda&model=Accord&zip=78701"), penv);
+const pj = await pr.json();
+ok(pr.status === 200 && pj.ok && pj.items.length === 1 && pj.items[0].from === "Austin, TX" && pj.items[0].price === 34.99, "parts listed");
+ok(calls.some((c) => c.includes("compatibility_filter")), "fitment filter used");
+ok((await worker.fetch(preq("q=x", "wrong"), penv)).status === 401, "parts need the token");
 const cfg = await (await worker.fetch(req("/config", { headers: { "x-fq-token": "secret" } }), { ...env, MAPS_EMBED_KEY: "mk" })).json();
 ok(cfg.ok && cfg.maps === "mk" && cfg.videos === false, "config");
 ok((await worker.fetch(req("/config", { headers: { "x-fq-token": "no" } }), env)).status === 401, "config needs the token");

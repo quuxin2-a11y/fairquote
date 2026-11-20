@@ -12,6 +12,9 @@
  *   MAX_PER_HOUR       reads allowed per code per hour in this region, default 60
  *   DAILY_READ_CAP     photo reads allowed per day across ALL users, default 300 (your spend ceiling)
  *   DEVICE_DAILY_CAP   photo reads per device (and per network address) per day, default 5
+ *   EBAY_CLIENT_ID / EBAY_CLIENT_SECRET   optional, turns on live parts listings with prices (free eBay developer keys)
+ *   EBAY_CAMPAIGN_ID   optional eBay Partner Network campaign number, to earn on parts purchases
+ *   PARTS_DAILY_CAP    new parts searches per day, default 150
  *   VIDEO_DAILY_CAP    new video searches per day, default 80 (the free YouTube quota allows about 100)
  * Optional binding:
  *   FQ_KV              a Workers KV namespace; keeps the daily counts exact across regions. Without it the
@@ -143,6 +146,69 @@ async function videos(env, url) {
   return new Response(out, { status: 200, headers: { "content-type": "application/json", ...CORS } });
 }
 
+// Live parts listings (price, photo, where the seller ships from) from the eBay Browse API. Needs EBAY_CLIENT_ID and EBAY_CLIENT_SECRET.
+let ebayTok = { v: "", exp: 0 };
+async function ebayToken(env) {
+  if (ebayTok.v && Date.now() < ebayTok.exp) return ebayTok.v;
+  const r = await fetch("https://api.ebay.com/identity/v1/oauth2/token", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded", authorization: "Basic " + btoa(env.EBAY_CLIENT_ID + ":" + env.EBAY_CLIENT_SECRET) },
+    body: "grant_type=client_credentials&scope=" + encodeURIComponent("https://api.ebay.com/oauth/api_scope")
+  });
+  if (!r.ok) return "";
+  const j = await r.json();
+  ebayTok = { v: j.access_token || "", exp: Date.now() + Math.max(60, (j.expires_in || 3600) - 300) * 1000 };
+  return ebayTok.v;
+}
+async function parts(env, url) {
+  if (!env.EBAY_CLIENT_ID || !env.EBAY_CLIENT_SECRET) return json({ ok: false, error: "Parts search is not set up on the server yet." }, 501);
+  const g = (n, m) => (url.searchParams.get(n) || "").trim().slice(0, m);
+  const q = g("q", 100), year = g("year", 4), make = g("make", 30), model = g("model", 40);
+  const zip = /^\d{5}$/.test(g("zip", 5)) ? g("zip", 5) : "";
+  if (!q) return json({ ok: false, error: "Missing search." }, 400);
+  const cache = typeof caches !== "undefined" ? caches.default : null;
+  const key = new Request("https://fq-cache.invalid/parts?" + encodeURIComponent([q, year, make, model, zip.slice(0, 3)].join("|").toLowerCase()));
+  if (cache) { const hit = await cache.match(key); if (hit) return new Response(hit.body, { status: 200, headers: { "content-type": "application/json", ...CORS } }); }
+  if (!(await bump(env, "all:parts", Number(env.PARTS_DAILY_CAP) || 150))) return json({ ok: false, error: "Parts search is busy today. Try again tomorrow." }, 429);
+  let tok;
+  try { tok = await ebayToken(env); } catch (e) { tok = ""; }
+  if (!tok) return json({ ok: false, error: "The parts service is unavailable right now." }, 502);
+  const search = async (withFit) => {
+    let api = "https://api.ebay.com/buy/browse/v1/item_summary/search?category_ids=6030&limit=12&filter=" + encodeURIComponent("buyingOptions:{FIXED_PRICE},priceCurrency:USD") + "&q=" + encodeURIComponent(q);
+    if (withFit && year && make && model) api += "&compatibility_filter=" + encodeURIComponent("Year:" + year + ";Make:" + make + ";Model:" + model);
+    const headers = { authorization: "Bearer " + tok, "x-ebay-c-marketplace-id": "EBAY_US" };
+    if (zip) headers["x-ebay-c-enduserctx"] = "contextualLocation=country=US,zip=" + zip;
+    return fetch(api, { headers });
+  };
+  let res, fit = !!(year && make && model);
+  try {
+    res = await search(true);
+    if (res.status === 400 && fit) { res = await search(false); fit = false; }
+  } catch (e) { return json({ ok: false, error: "Could not reach the parts service." }, 502); }
+  if (!res.ok) return json({ ok: false, error: "The parts service is unavailable right now (" + res.status + ")." }, 502);
+  const data = await res.json();
+  const camp = String(env.EBAY_CAMPAIGN_ID || "").replace(/[^0-9]/g, "");
+  const list = (data.itemSummaries || []).map((i) => {
+    const price = Number(i.price && i.price.value);
+    const loc = i.itemLocation || {};
+    const ship = i.shippingOptions && i.shippingOptions[0] && i.shippingOptions[0].shippingCost ? Number(i.shippingOptions[0].shippingCost.value) : null;
+    let link = String(i.itemWebUrl || "");
+    if (!/^https:\/\/[\w.-]*ebay\.com\//.test(link)) return null;
+    if (camp) link += (link.indexOf("?") > -1 ? "&" : "?") + "mkcid=1&mkrid=711-53200-19255-0&siteid=0&campid=" + camp + "&toolid=10001&mkevt=1";
+    return {
+      title: String(i.title || "").slice(0, 110), price: price, ship: ship != null && !isNaN(ship) ? ship : null,
+      img: String((i.image && i.image.imageUrl) || (i.thumbnailImages && i.thumbnailImages[0] && i.thumbnailImages[0].imageUrl) || ""),
+      cond: String(i.condition || "").slice(0, 30),
+      from: [loc.city, loc.stateOrProvince || loc.country].filter(Boolean).join(", ").slice(0, 40),
+      seller: String((i.seller && i.seller.username) || "").slice(0, 30), fb: i.seller && i.seller.feedbackPercentage ? String(i.seller.feedbackPercentage).slice(0, 6) : "",
+      url: link
+    };
+  }).filter((x) => x && x.price > 0 && /^https:\/\//.test(x.img || "https://")).slice(0, 8);
+  const out = JSON.stringify({ ok: true, fit: fit, items: list });
+  if (cache && list.length) await cache.put(key, new Response(out, { headers: { "content-type": "application/json", "cache-control": "public, max-age=86400" } }));
+  return new Response(out, { status: 200, headers: { "content-type": "application/json", ...CORS } });
+}
+
 export default {
   async fetch(request, env) {
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
@@ -151,14 +217,16 @@ export default {
     const isConfig = url.pathname === "/config" && request.method === "GET";
     const isVideos = url.pathname === "/videos" && request.method === "GET";
     const isRead = url.pathname === "/read" && request.method === "POST";
-    if (!isConfig && !isVideos && !isRead) return json({ ok: false, error: "Not found." }, 404);
+    const isParts = url.pathname === "/parts" && request.method === "GET";
+    if (!isConfig && !isVideos && !isRead && !isParts) return json({ ok: false, error: "Not found." }, 404);
 
     if (!env.APP_TOKEN || (isRead && !env.ANTHROPIC_API_KEY)) return json({ ok: false, error: "The server is not set up yet." }, 500);
     const token = request.headers.get("x-fq-token") || "";
     if (token !== env.APP_TOKEN) return json({ ok: false, error: "The access code does not match. Check Settings." }, 401);
     if (limited(token, Number(env.MAX_PER_HOUR) || 60)) return json({ ok: false, error: "Too many requests this hour. Try again later." }, 429);
-    if (isConfig) return json({ ok: true, maps: env.MAPS_EMBED_KEY || "", videos: !!env.YOUTUBE_API_KEY });
+    if (isConfig) return json({ ok: true, maps: env.MAPS_EMBED_KEY || "", videos: !!env.YOUTUBE_API_KEY, parts: !!(env.EBAY_CLIENT_ID && env.EBAY_CLIENT_SECRET) });
     if (isVideos) return videos(env, url);
+    if (isParts) return parts(env, url);
 
     let body;
     try { body = await request.json(); } catch (e) { return json({ ok: false, error: "Bad request." }, 400); }

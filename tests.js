@@ -124,4 +124,32 @@ t("PDF summary is well formed and has a QR code", () => {
   const q = FQQR.make("https://example.com/get");
   assert(q.size === 25 && q.get(0, 0) && !q.get(7, 0), "qr finder pattern");
 });
+t("detects electric and hybrid models", () => {
+  const g = FQDATA.guessFuel;
+  assert.strictEqual(g("Tesla", "Model Y", ""), "ev");
+  assert.strictEqual(g("Nissan", "Leaf", ""), "ev");
+  assert.strictEqual(g("Ford", "Mustang Mach-E", ""), "ev");
+  assert.strictEqual(g("Ford", "F-150 Lightning", ""), "ev");
+  assert.strictEqual(g("Chevrolet", "Bolt EV", ""), "ev");
+  assert.strictEqual(g("Hyundai", "Ioniq 5", ""), "ev");
+  assert.strictEqual(g("Volkswagen", "ID.4", ""), "ev");
+  assert.strictEqual(g("BMW", "i4", ""), "ev");
+  assert.strictEqual(g("BMW", "330i", ""), "");
+  assert.strictEqual(g("Ford", "F-150", "XLT"), "");
+  assert.strictEqual(g("Toyota", "Prius", ""), "hybrid");
+  assert.strictEqual(g("Honda", "Accord", "Hybrid"), "hybrid");
+  assert.strictEqual(g("Honda", "Accord", "EX"), "");
+});
+t("electric cars hide engine jobs and show electric ones", () => {
+  const ev = FQDATA.JOBS.filter((j) => FQDATA.jobApplies(j, "ev")).map((j) => j.id);
+  assert(!ev.includes("oil") && !ev.includes("plugs") && !ev.includes("alternator"));
+  assert(ev.includes("evcoolant") && ev.includes("brakes_f") && ev.includes("tires"));
+  const gas = FQDATA.JOBS.filter((j) => FQDATA.jobApplies(j, "gas")).map((j) => j.id);
+  assert(gas.includes("oil") && !gas.includes("evcoolant") && !gas.includes("reducer"));
+});
+t("an electric-only service on a gas car is flagged", () => {
+  const r = FQ.analyze({ shop: "x", lines: [{ desc: "Battery coolant service", type: "combined", amount: 300 }] }, civic);
+  assert(JSON.stringify(r).includes("not electric"));
+});
+
 console.log(n + " tests passed");

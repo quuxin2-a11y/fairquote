@@ -105,8 +105,34 @@
     { id: "headlight", name: "Headlight bulb", fam: "headlight", scope: 1, re: /headlight|head lamp|headlamp bulb/i, parts: [15, 110], hrs: [0.2, 0.8], diy: [2, 0.4, "Usually none"], term: "headlight bulb", q: ["Is it a plain halogen bulb or a full assembly?"] },
     { id: "motormount", name: "Engine mount", fam: "motormount", scope: 1, re: /motor mount|engine mount/i, parts: [40, 260], hrs: [1.4, 3.0], diy: [4, 3, "Engine support, socket set"], term: "engine mount", q: ["Which mount and how did you confirm it is torn?"] },
     { id: "valvecover", name: "Valve cover gasket", fam: "valvecover", scope: 1, re: /valve cover/i, parts: [25, 160], hrs: [1.4, 3.6], ev: false, diy: [3, 2.5, "Socket set, torque wrench"], term: "valve cover gasket set", q: ["Where exactly is the oil leaking from?"] },
+    { id: "evcoolant", name: "Battery and drive unit coolant service", fam: "evcoolant", scope: 1, re: /battery coolant|ev coolant|drive unit coolant|thermal (system|loop)|battery cooling/i, parts: [40, 160], hrs: [1.0, 2.5], ev: true, due: [100000, 150000], diy: [4, 2.5, "Vacuum fill tool, correct coolant (model specific)"], term: "EV battery coolant", q: ["Which coolant is used? Electric cars need the exact type the maker specifies.", "Is this on the maker's schedule or a shop suggestion?"] },
+    { id: "reducer", name: "Reduction gear fluid change", fam: "reducer", scope: 1, re: /reduction gear|gear (oil|fluid)|drive unit (oil|fluid)|transaxle fluid/i, parts: [25, 110], hrs: [0.5, 1.4], ev: true, due: [60000, 150000], diy: [3, 1, "Drain pan, correct fluid (model specific)"], term: "EV reduction gear fluid", q: ["Does the maker call for this service at my mileage?", "Which fluid is being used?"] },
+    { id: "hvcheck", name: "High-voltage battery health check", fam: "hvcheck", scope: 1, re: /hv battery|high.?voltage battery|battery (health|state|test|diagnostic)|traction battery/i, parts: [0, 0], flatDollars: [0, 160], hrs: [0, 0], ev: true, diy: [1, 0.2, "A phone app and plug-in reader for many models"], term: "OBD2 EV battery reader", q: ["Is the battery health report printed so I can keep it?", "Is the fee credited if I need a repair?"] },
+    { id: "chargeport", name: "Charge port or charging cable repair", fam: "chargeport", scope: 1, re: /charge port|charging port|charge cable|charging cable|charge inlet|onboard charger/i, parts: [150, 900], hrs: [1.0, 3.5], ev: true, diy: [4, 2.5, "Trim tools, multimeter"], term: "EV charge port", q: ["Is this covered by the high-voltage or the basic warranty?", "Was the charge port diagnosed before replacing it?"] },
     { id: "diag", name: "Diagnostic fee", fam: "diag", scope: 1, re: /diagnos|check engine|scan|inspection fee|code read/i, parts: [0, 0], flat: [0, 0], flatDollars: [60, 190], hrs: [0, 0], diy: [2, 0.3, "OBD-II scanner (about $25 to $60)"], term: "OBD2 scanner", q: ["Is the diagnostic fee credited if I have the repair done here?"] }
   ];
+
+  // Electric and hybrid detection from make and model, so the profile sets itself up correctly.
+  var EV_MAKES = /^(tesla|rivian|lucid|polestar|fisker|vinfast)$/i;
+  var EV_MODELS = /\b(leaf|bolt|volt ev|mach.?e|mustang mach|ioniq ?[569]|id\.?[3-9]|id\.? buzz|ev[3569]|e.?tron|i[x]\d?|i4|eq[sebc]|f.?150 lightning|lightning|blazer ev|equinox ev|silverado ev|prologue|solterra|bz4x|cybertruck|hummer ev|taycan|macan electric|i.?pace|e.?golf|500e|kona electric|niro ev|spark ev|model [3sxy]|roadster|zdx|cooper se|enyaq|e.?up|fortwo electric|soul ev|ariya|rz|ux 300e|vision)\b/i;
+  var HYBRID_RE = /\b(prius|hybrid|insight|clarity|ioniq hybrid|niro(?! ev)|crosstrek hybrid|rav4 prime|prime|phev)\b/i;
+  function guessFuel(make, model, trim) {
+    var m = String(make || "").trim(), t = String(model || "") + " " + String(trim || "");
+    if (EV_MAKES.test(m)) return "ev";
+    if (/\b(hybrid|phev)\b/i.test(t)) return "hybrid";
+    if (EV_MODELS.test(t) && !/\bgas\b/i.test(t)) {
+      if (/^(bmw)$/i.test(m) && !/\b(i[x]\d?|i4|i5|i7)\b/i.test(t)) return "";
+      if (/^(ford)$/i.test(m) && !/\b(mach|lightning)\b/i.test(t)) return "";
+      if (/^(volkswagen|vw)$/i.test(m) && !/\b(id|e.?golf|buzz)\b/i.test(t)) return "";
+      return "ev";
+    }
+    if (HYBRID_RE.test(t)) return "hybrid";
+    return "";
+  }
+  function jobApplies(job, fuel) {
+    if (fuel === "ev") return job.ev !== false;
+    return job.ev !== true;
+  }
 
   var FEE_RE = {
     supplies: /shop suppl|miscellaneous|misc\.?|sundry|hardware|environmental|haz.?mat|disposal|waste|eco fee|tire disposal/i,
@@ -115,5 +141,5 @@
     total: /^\s*(grand\s+)?(sub)?total|amount due|balance due/i
   };
 
-  root.FQDATA = { TIERS: TIERS, STATE_TIER: STATE_TIER, STATES: STATES, LUXURY: LUXURY, MAKES: MAKES, CLASSES: CLASSES, JOBS: JOBS, FEE_RE: FEE_RE };
+  root.FQDATA = { TIERS: TIERS, STATE_TIER: STATE_TIER, STATES: STATES, LUXURY: LUXURY, MAKES: MAKES, CLASSES: CLASSES, JOBS: JOBS, FEE_RE: FEE_RE, guessFuel: guessFuel, jobApplies: jobApplies };
 })(typeof window !== "undefined" ? window : globalThis);
